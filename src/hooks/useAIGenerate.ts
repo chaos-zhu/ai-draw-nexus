@@ -1,0 +1,378 @@
+import { useChatStore } from '@/stores/chatStore'
+import { useEditorStore } from '@/stores/editorStore'
+import { usePayloadStore } from '@/stores/payloadStore'
+import { VersionRepository } from '@/services/versionRepository'
+import { ProjectRepository } from '@/services/projectRepository'
+import {
+  SYSTEM_PROMPTS,
+  buildInitialPrompt,
+  buildEditPrompt,
+  extractCode,
+} from '@/lib/promptBuilder'
+import { generateThumbnail } from '@/lib/thumbnail'
+import { aiService } from '@/services/aiService'
+import { validateContent } from '@/lib/validators'
+import { useToast } from '@/hooks/useToast'
+import type { PayloadMessage, EngineType, Attachment, ContentPart } from '@/types'
+
+// Enable streaming by default, can be configured
+const USE_STREAMING = true
+
+/**
+ * Build multimodal content from text, attachments, and optional current thumbnail
+ * @param text - The text content
+ * @param attachments - Optional user attachments (images or documents)
+ * @param currentThumbnail - Optional current diagram thumbnail for context
+ */
+function buildMultimodalContent(
+  text: string,
+  attachments?: Attachment[],
+  currentThumbnail?: string
+): string | ContentPart[] {
+  const hasAttachments = attachments && attachments.length > 0
+  const hasThumbnail = currentThumbnail && currentThumbnail.trim() !== ''
+
+  if (!hasAttachments && !hasThumbnail) {
+    return text
+  }
+
+  const parts: ContentPart[] = []
+
+  // Add current thumbnail first for context (if available)
+  if (hasThumbnail) {
+    parts.push({
+      type: 'image_url',
+      image_url: { url: currentThumbnail },
+    })
+  }
+
+  // Add text content
+  if (text) {
+    parts.push({ type: 'text', text })
+  }
+
+  // Add user attachments
+  if (hasAttachments) {
+    for (const attachment of attachments) {
+      if (attachment.type === 'image') {
+        parts.push({
+          type: 'image_url',
+          image_url: { url: attachment.dataUrl },
+        })
+      } else if (attachment.type === 'document') {
+        // For documents, append the extracted text content
+        parts.push({
+          type: 'text',
+          text: `\n\n[Document: ${attachment.fileName}]\n${attachment.content}`,
+        })
+      }
+    }
+  }
+
+  return parts
+}
+
+export function useAIGenerate() {
+  const {
+    addMessage,
+    updateMessage,
+    setStreaming,
+  } = useChatStore()
+
+  const {
+    currentProject,
+    currentContent,
+    setContentFromVersion,
+    setLoading,
+  } = useEditorStore()
+
+  const { setMessages } = usePayloadStore()
+  const { success, error: showError } = useToast()
+
+  /**
+   * Generate diagram using AI with streaming support
+   * @param userInput - User's description or modification request
+   * @param isInitial - Whether this is initial generation (empty canvas)
+   * @param attachments - Optional attachments (images or documents)
+   */
+  const generate = async (
+    userInput: string,
+    isInitial: boolean,
+    attachments?: Attachment[]
+  ) => {
+    if (!currentProject) return
+
+    const engineType = currentProject.engineType
+    const systemPrompt = SYSTEM_PROMPTS[engineType]
+
+    // Add user message to UI (with attachments)
+    addMessage({
+      role: 'user',
+      content: userInput,
+      status: 'complete',
+      attachments,
+    })
+
+    // Add assistant message placeholder
+    const assistantMsgId = addMessage({
+      role: 'assistant',
+      content: '',
+      status: 'streaming',
+    })
+
+    setStreaming(true)
+    setLoading(true)
+
+    try {
+      let finalCode: string
+
+      if (isInitial) {
+        // 暂时全都使用一步生成
+        const useTwoPhase = false
+
+        if (useTwoPhase) {
+          finalCode = await twoPhaseGeneration(
+            userInput,
+            engineType,
+            systemPrompt,
+            assistantMsgId,
+            attachments
+          )
+        } else {
+          finalCode = await singlePhaseInitialGeneration(
+            userInput,
+            engineType,
+            systemPrompt,
+            assistantMsgId,
+            attachments
+          )
+        }
+      } else {
+        // Single-phase for edits - pass current thumbnail for context
+        finalCode = await singlePhaseGeneration(
+          userInput,
+          currentContent,
+          engineType,
+          systemPrompt,
+          assistantMsgId,
+          attachments,
+          currentProject.thumbnail
+        )
+      }
+
+      // Validate the generated content
+      console.log('finalCode', finalCode)
+      const validation = await validateContent(finalCode, engineType)
+      if (!validation.valid) {
+        throw new Error(`Invalid ${engineType} output: ${validation.error}`)
+      }
+
+      // Update content (AI generation auto-saves, so mark as saved)
+      setContentFromVersion(finalCode)
+
+      // Update assistant message
+      updateMessage(assistantMsgId, {
+        content: 'Diagram generated successfully.',
+        status: 'complete',
+      })
+
+      // Save version
+      await VersionRepository.create({
+        projectId: currentProject.id,
+        content: finalCode,
+        changeSummary: isInitial ? '初始生成' : 'AI 修改',
+      })
+
+      // Generate and save thumbnail
+      try {
+        const thumbnail = await generateThumbnail(finalCode, engineType)
+        if (thumbnail) {
+          await ProjectRepository.update(currentProject.id, { thumbnail })
+        }
+      } catch (err) {
+        console.error('Failed to generate thumbnail:', err)
+      }
+
+      // Update project timestamp
+      await ProjectRepository.update(currentProject.id, {})
+
+      success('Diagram generated successfully')
+
+    } catch (error) {
+      console.error('AI generation failed:', error)
+      updateMessage(assistantMsgId, {
+        content: `Error: ${error instanceof Error ? error.message : 'Generation failed'}`,
+        status: 'error',
+      })
+      showError(error instanceof Error ? error.message : 'Generation failed')
+    } finally {
+      setStreaming(false)
+      setLoading(false)
+    }
+  }
+
+  /**
+   * Two-phase generation for initial creation (drawio/excalidraw)
+   */
+  const twoPhaseGeneration = async (
+    userInput: string,
+    engineType: EngineType,
+    systemPrompt: string,
+    assistantMsgId: string,
+    attachments?: Attachment[]
+  ): Promise<string> => {
+    // Phase 1: Generate elements
+    updateMessage(assistantMsgId, {
+      content: 'Phase 1/2: Generating elements...',
+      status: 'streaming',
+    })
+
+    const phase1Prompt = buildInitialPrompt(userInput, true, 'elements')
+    const phase1Content = buildMultimodalContent(phase1Prompt, attachments)
+
+    const phase1Messages: PayloadMessage[] = [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: phase1Content },
+    ]
+
+    setMessages(phase1Messages)
+
+    let elements: string
+    if (USE_STREAMING) {
+      const response = await aiService.streamChat(
+        phase1Messages,
+        (_chunk, accumulated) => {
+          updateMessage(assistantMsgId, {
+            content: `Phase 1/2: Generating elements...\n\n${accumulated}`,
+          })
+        }
+      )
+      elements = extractCode(response, engineType)
+    } else {
+      const response = await aiService.chat(phase1Messages)
+      elements = extractCode(response, engineType)
+    }
+
+    // Phase 2: Generate links/connections
+    updateMessage(assistantMsgId, {
+      content: 'Phase 2/2: Generating connections...',
+      status: 'streaming',
+    })
+
+    // Generate thumbnail from phase 1 elements for context
+    let phase1Thumbnail: string | undefined
+    try {
+      phase1Thumbnail = await generateThumbnail(elements, engineType)
+    } catch (err) {
+      console.error('Failed to generate phase 1 thumbnail:', err)
+    }
+
+    const phase2Prompt = buildInitialPrompt(userInput, true, 'links', elements)
+    const phase2Content = buildMultimodalContent(phase2Prompt, attachments, phase1Thumbnail)
+    const phase2Messages: PayloadMessage[] = [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: phase1Content },
+      { role: 'assistant', content: elements },
+      { role: 'user', content: phase2Content },
+    ]
+
+    setMessages(phase2Messages)
+
+    if (USE_STREAMING) {
+      const response = await aiService.streamChat(
+        phase2Messages,
+        (_chunk, accumulated) => {
+          updateMessage(assistantMsgId, {
+            content: `Phase 2/2: Generating connections...\n\n${accumulated}`,
+          })
+        }
+      )
+      return extractCode(response, engineType)
+    } else {
+      const response = await aiService.chat(phase2Messages)
+      return extractCode(response, engineType)
+    }
+  }
+
+  /**
+   * Single-phase generation for initial creation (mermaid)
+   */
+  const singlePhaseInitialGeneration = async (
+    userInput: string,
+    engineType: EngineType,
+    systemPrompt: string,
+    assistantMsgId: string,
+    attachments?: Attachment[]
+  ): Promise<string> => {
+    updateMessage(assistantMsgId, {
+      content: 'Generating diagram...',
+      status: 'streaming',
+    })
+
+    const prompt = buildInitialPrompt(userInput, false)
+    const content = buildMultimodalContent(prompt, attachments)
+
+    const messages: PayloadMessage[] = [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: content },
+    ]
+
+    setMessages(messages)
+
+    if (USE_STREAMING) {
+      const response = await aiService.streamChat(
+        messages,
+        (_chunk, accumulated) => {
+          updateMessage(assistantMsgId, {
+            content: `Generating diagram...\n\n${accumulated}`,
+          })
+        }
+      )
+      return extractCode(response, engineType)
+    } else {
+      const response = await aiService.chat(messages)
+      return extractCode(response, engineType)
+    }
+  }
+
+  /**
+   * Single-phase generation for edits
+   * @param currentThumbnail - Current diagram thumbnail for AI context
+   */
+  const singlePhaseGeneration = async (
+    userInput: string,
+    currentCode: string,
+    engineType: EngineType,
+    systemPrompt: string,
+    assistantMsgId: string,
+    attachments?: Attachment[],
+    currentThumbnail?: string
+  ): Promise<string> => {
+    const editPrompt = buildEditPrompt(currentCode, userInput)
+    const editContent = buildMultimodalContent(editPrompt, attachments, currentThumbnail)
+
+    const messages: PayloadMessage[] = [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: editContent },
+    ]
+
+    setMessages(messages)
+
+    if (USE_STREAMING) {
+      const response = await aiService.streamChat(
+        messages,
+        (_chunk, accumulated) => {
+          updateMessage(assistantMsgId, {
+            content: `Modifying diagram...\n\n${accumulated}`,
+          })
+        }
+      )
+      return extractCode(response, engineType)
+    } else {
+      const response = await aiService.chat(messages)
+      return extractCode(response, engineType)
+    }
+  }
+
+  return { generate }
+}

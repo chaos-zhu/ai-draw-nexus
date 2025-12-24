@@ -1,0 +1,156 @@
+import { useCallback, useRef, useImperativeHandle, forwardRef } from 'react'
+import { useEditorStore, selectEngineType } from '@/stores/editorStore'
+import { MermaidRenderer, type MermaidRendererRef } from '@/features/engines/mermaid/MermaidRenderer'
+import { ExcalidrawEditor, type ExcalidrawEditorRef } from '@/features/engines/excalidraw/ExcalidrawEditor'
+import { DrawioEditor, type DrawioEditorRef } from '@/features/engines/drawio/DrawioEditor'
+
+export interface CanvasAreaRef {
+  exportAsSvg: () => void
+  exportAsPng: () => void
+  showSourceCode: () => void
+  hideSourceCode: () => void
+  toggleSourceCode: () => void
+}
+
+export const CanvasArea = forwardRef<CanvasAreaRef>(function CanvasArea(_, ref) {
+  const currentContent = useEditorStore((s) => s.currentContent)
+  const currentProject = useEditorStore((s) => s.currentProject)
+  const engineType = useEditorStore(selectEngineType)
+  const isLoading = useEditorStore((s) => s.isLoading)
+  const setContent = useEditorStore((s) => s.setContent)
+
+  // Use projectId as key to force remount when switching projects
+  // This prevents Excalidraw from using its internal localStorage cache
+  const projectKey = currentProject?.id || 'no-project'
+
+  // Refs for each engine
+  const mermaidRef = useRef<MermaidRendererRef>(null)
+  const excalidrawRef = useRef<ExcalidrawEditorRef>(null)
+  const drawioRef = useRef<DrawioEditorRef>(null)
+
+  // Expose methods via ref
+  useImperativeHandle(ref, () => ({
+    exportAsSvg: () => {
+      switch (engineType) {
+        case 'mermaid':
+          mermaidRef.current?.exportAsSvg()
+          break
+        case 'excalidraw':
+          excalidrawRef.current?.exportAsSvg()
+          break
+        case 'drawio':
+          drawioRef.current?.exportAsSvg()
+          break
+      }
+    },
+    exportAsPng: () => {
+      switch (engineType) {
+        case 'mermaid':
+          mermaidRef.current?.exportAsPng()
+          break
+        case 'excalidraw':
+          excalidrawRef.current?.exportAsPng()
+          break
+        case 'drawio':
+          drawioRef.current?.exportAsPng()
+          break
+      }
+    },
+    showSourceCode: () => {
+      switch (engineType) {
+        case 'mermaid':
+          mermaidRef.current?.showSourceCode()
+          break
+        case 'excalidraw':
+          excalidrawRef.current?.showSourceCode()
+          break
+        case 'drawio':
+          drawioRef.current?.showSourceCode()
+          break
+      }
+    },
+    hideSourceCode: () => {
+      switch (engineType) {
+        case 'mermaid':
+          mermaidRef.current?.hideSourceCode()
+          break
+        case 'excalidraw':
+          excalidrawRef.current?.hideSourceCode()
+          break
+        case 'drawio':
+          drawioRef.current?.hideSourceCode()
+          break
+      }
+    },
+    toggleSourceCode: () => {
+      switch (engineType) {
+        case 'mermaid':
+          mermaidRef.current?.toggleSourceCode()
+          break
+        case 'excalidraw':
+          excalidrawRef.current?.toggleSourceCode()
+          break
+        case 'drawio':
+          drawioRef.current?.toggleSourceCode()
+          break
+      }
+    },
+  }), [engineType])
+
+  if (!engineType) {
+    return (
+      <div className="flex h-full items-center justify-center bg-background text-muted">
+        Loading...
+      </div>
+    )
+  }
+
+  // Handle content change from editors - only update store, no auto-save to database
+  const handleContentChange = useCallback((newContent: string) => {
+    setContent(newContent)
+  }, [setContent])
+
+  // Render based on engine type
+  const renderEngine = () => {
+    switch (engineType) {
+      case 'mermaid':
+        return <MermaidRenderer ref={mermaidRef} code={currentContent} />
+      case 'excalidraw':
+        return (
+          <ExcalidrawEditor
+            ref={excalidrawRef}
+            key={projectKey}
+            data={currentContent}
+            onChange={handleContentChange}
+          />
+        )
+      case 'drawio':
+        return (
+          <DrawioEditor
+            ref={drawioRef}
+            key={projectKey}
+            data={currentContent}
+            onChange={handleContentChange}
+          />
+        )
+      default:
+        return null
+    }
+  }
+
+  return (
+    <div className="relative h-full w-full bg-background">
+      {renderEngine()}
+
+      {/* Loading Overlay */}
+      {isLoading && (
+        <div className="absolute inset-0 flex items-center justify-center bg-background/80">
+          <div className="text-center">
+            <div className="mb-2 h-8 w-8 animate-spin rounded-full border-2 border-primary border-r-transparent mx-auto" />
+            <p className="text-sm text-muted">Generating diagram...</p>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+})

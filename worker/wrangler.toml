@@ -1,0 +1,33 @@
+name = "ai-diagram-hub-worker"
+main = "src/index.ts"
+compatibility_date = "2024-09-25"
+
+# All environment variables must be set via wrangler secret:
+# wrangler secret put AI_PROVIDER
+# wrangler secret put AI_BASE_URL
+# wrangler secret put AI_API_KEY
+# wrangler secret put AI_MODEL_ID
+
+# Development environment
+[env.dev]
+name = "ai-diagram-hub-worker-dev"
+
+# Set secrets for dev environment:
+# wrangler secret put AI_PROVIDER --env dev
+# wrangler secret put AI_BASE_URL --env dev
+# wrangler secret put AI_API_KEY --env dev
+# wrangler secret put AI_MODEL_ID --env dev
+
+# Production environment
+[env.production]
+name = "ai-diagram-hub-worker"
+routes = [
+  { pattern = "api.your-domain.com/*", zone_name = "your-domain.com" }
+]
+
+# Set secrets for production environment:
+# wrangler secret put AI_PROVIDER --env production
+# wrangler secret put AI_BASE_URL --env production
+# wrangler secret put AI_API_KEY --env production
+# wrangler secret put AI_MODEL_ID --env production
+

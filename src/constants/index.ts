@@ -1,8 +1,6 @@
 import {
   Home,
-  FileText,
   User,
-  Info,
   GitBranch,
   Network,
   Workflow,

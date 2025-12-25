@@ -104,15 +104,21 @@ export const ExcalidrawEditor = forwardRef<ExcalidrawEditorRef, ExcalidrawEditor
   const skipProgrammaticChangeRef = useRef(false)
   const onChangeRef = useRef(onChange)
   const excalidrawAPIRef = useRef<ExcalidrawImperativeAPI | null>(null)
+  // Track the initial data prop to detect external changes (e.g., AI generation, version restore)
+  const initialDataPropRef = useRef(data)
+  // Debounce timer for onChange
+  const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  // Parse initial data - supports both array format and object format
+  // Parse initial data - only computed once on mount
+  // Subsequent data changes are handled via updateScene in useEffect
   const initialData = useMemo<ExcalidrawData | null>(() => {
-    if (!data.trim()) {
+    const dataToUse = initialDataPropRef.current
+    if (!dataToUse.trim()) {
       return { elements: [] }
     }
 
     try {
-      const parsed = JSON.parse(data)
+      const parsed = JSON.parse(dataToUse)
       // Support both formats:
       // 1. Direct array: [{ id, type, x, y, ... }, ...]
       // 2. Object format: { elements: [...] }
@@ -134,7 +140,8 @@ export const ExcalidrawEditor = forwardRef<ExcalidrawEditorRef, ExcalidrawEditor
       setError(errorMessage)
       return { elements: [] }
     }
-  }, [data])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // Keep onChange ref up to date
   useEffect(() => {
@@ -163,24 +170,24 @@ export const ExcalidrawEditor = forwardRef<ExcalidrawEditorRef, ExcalidrawEditor
     }
   }, [data])
 
-  // Track scene version when initialData changes to skip programmatic updates
+  // Sync editedCode when data prop changes (but only for external changes)
   useEffect(() => {
-    if (initialData?.elements) {
-      const injectedVersion = getSceneVersion(initialData.elements)
-      lastSceneVersionRef.current = injectedVersion
-      skipProgrammaticChangeRef.current = true
+    // Only sync if this is an external change, not from user drawing
+    if (data !== initialDataPropRef.current) {
+      setEditedCode(data)
+      setHasChanges(false)
     }
-  }, [initialData])
-
-  // Sync editedCode when data prop changes
-  useEffect(() => {
-    setEditedCode(data)
-    setHasChanges(false)
   }, [data])
 
-  // Update canvas when data prop changes from external source (e.g., AI generation)
+  // Update canvas when data prop changes from external source (e.g., AI generation, version restore)
+  // This should NOT run when data changes due to user drawing
   useEffect(() => {
     if (!excalidrawAPI || !data.trim()) return
+
+    // Skip if this change originated from user drawing (handleChange already updated the ref)
+    if (data === initialDataPropRef.current) {
+      return
+    }
 
     try {
       const parsed = JSON.parse(data)
@@ -191,18 +198,15 @@ export const ExcalidrawEditor = forwardRef<ExcalidrawEditorRef, ExcalidrawEditor
       // Prepare elements with proper binding handling
       const restoredElements = prepareExcalidrawElements(elementsData)
 
-      // Skip if elements are the same (prevent unnecessary updates)
-      const currentElements = excalidrawAPI.getSceneElements()
-      const currentVersion = getSceneVersion(currentElements)
-      const newVersion = getSceneVersion(restoredElements)
+      // Mark as programmatic change and update scene
+      skipProgrammaticChangeRef.current = true
+      lastSceneVersionRef.current = getSceneVersion(restoredElements)
+      initialDataPropRef.current = data
 
-      if (currentVersion !== newVersion) {
-        skipProgrammaticChangeRef.current = true
-        excalidrawAPI.updateScene({
-          elements: restoredElements,
-          appState: { isLoading: false },
-        })
-      }
+      excalidrawAPI.updateScene({
+        elements: restoredElements,
+        appState: { isLoading: false },
+      })
     } catch {
       // Invalid JSON, ignore
     }
@@ -380,7 +384,7 @@ export const ExcalidrawEditor = forwardRef<ExcalidrawEditorRef, ExcalidrawEditor
     toggleSourceCode: () => setShowCodePanel(prev => !prev),
   }), [exportAsSvg, exportAsPng, exportAsSource])
 
-  // Handle changes from Excalidraw - use version tracking to prevent loops
+  // Handle changes from Excalidraw - use version tracking and debounce
   const handleChange = useCallback((
     elements: readonly ExcalidrawElementAny[],
   ) => {
@@ -388,7 +392,7 @@ export const ExcalidrawEditor = forwardRef<ExcalidrawEditorRef, ExcalidrawEditor
 
     const currentVersion = getSceneVersion(elements as ExcalidrawElementAny[])
 
-    // Skip programmatic changes (from initialData updates)
+    // Skip programmatic changes (from external data updates like AI generation)
     if (skipProgrammaticChangeRef.current) {
       skipProgrammaticChangeRef.current = false
       lastSceneVersionRef.current = currentVersion
@@ -402,18 +406,25 @@ export const ExcalidrawEditor = forwardRef<ExcalidrawEditorRef, ExcalidrawEditor
 
     lastSceneVersionRef.current = currentVersion
 
-    // Get the latest elements from the API if available
-    const api = excalidrawAPIRef.current
-    const sceneElements = api ? api.getSceneElements() : elements
-
-    if (onChangeRef.current) {
-      // Export elements directly - they already contain full binding information
-      // Do NOT use convertToExcalidrawElements here as it would lose the bindings
-      const exportData: ExcalidrawData = {
-        elements: sceneElements as ExcalidrawElementAny[],
-      }
-      onChangeRef.current(JSON.stringify(exportData, null, 2))
+    // Debounce the onChange callback to avoid performance issues during drawing
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current)
     }
+
+    debounceTimerRef.current = setTimeout(() => {
+      // Get the latest elements from the API if available
+      const api = excalidrawAPIRef.current
+      const sceneElements = api ? api.getSceneElements() : elements
+
+      if (onChangeRef.current) {
+        const exportData: ExcalidrawData = {
+          elements: sceneElements as ExcalidrawElementAny[],
+        }
+        const jsonData = JSON.stringify(exportData, null, 2)
+        initialDataPropRef.current = jsonData
+        onChangeRef.current(jsonData)
+      }
+    }, 300)
   }, [])
 
   if (error && data.trim()) {

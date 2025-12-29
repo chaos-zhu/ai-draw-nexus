@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { Menu, History, Pencil, Check, X, Plus, FolderOpen, Home, Save, Download, Image, Code, FileText } from 'lucide-react'
+import { Menu, History, Pencil, Check, X, Plus, FolderOpen, Home, Save, Download, Image, Code, FileText, ChevronRight } from 'lucide-react'
 import { Button, Input, Loading } from '@/components/ui'
 import { ChatPanel } from '@/features/chat/ChatPanel'
 import { CanvasArea, type CanvasAreaRef } from '@/features/editor/CanvasArea'
@@ -29,6 +29,9 @@ export function EditorPage() {
   const { projectId } = useParams<{ projectId: string }>()
   const navigate = useNavigate()
   const [isVersionPanelOpen, setIsVersionPanelOpen] = useState(false)
+  const [isChatPanelCollapsed, setIsChatPanelCollapsed] = useState(() => {
+    return localStorage.getItem('ai-draw-nexus.chatPanelCollapsed') === 'true'
+  })
   const [isLoading, setIsLoading] = useState(true)
   const [isEditingTitle, setIsEditingTitle] = useState(false)
   const [editedTitle, setEditedTitle] = useState('')
@@ -40,6 +43,10 @@ export function EditorPage() {
 
   const { currentProject, currentContent, hasUnsavedChanges, setProject, setContentFromVersion, markAsSaved, reset: resetEditor } = useEditorStore()
   const { clearMessages } = useChatStore()
+
+  useEffect(() => {
+    localStorage.setItem('ai-draw-nexus.chatPanelCollapsed', String(isChatPanelCollapsed))
+  }, [isChatPanelCollapsed])
 
   // Load project on mount
   useEffect(() => {
@@ -363,21 +370,32 @@ export function EditorPage() {
       {/* Main Content */}
       <div className="flex flex-1 overflow-hidden">
         {/* Left: Chat Panel */}
-        <div className="w-80 flex-shrink-0 border-r border-border">
-          <ChatPanel />
+        <div className={`flex-shrink-0 border-r border-border transition-all ${isChatPanelCollapsed ? 'w-10' : 'w-80'}`}>
+          <div className={isChatPanelCollapsed ? 'hidden' : 'h-full'}>
+            <ChatPanel onCollapse={() => setIsChatPanelCollapsed(true)} />
+          </div>
+          {isChatPanelCollapsed && (
+            <div className="flex h-full flex-col items-center bg-surface py-2">
+              <Button
+                variant="ghost"
+                size="icon"
+                title="展开对话面板"
+                onClick={() => setIsChatPanelCollapsed(false)}
+              >
+                <ChevronRight className="h-4 w-4" />
+              </Button>
+            </div>
+          )}
         </div>
 
         {/* Center: Canvas */}
-        <div className="flex-1">
+        <div className="relative flex-1">
           <CanvasArea ref={canvasRef} onReady={handleCanvasReady} />
+          {/* Version Panel (floating) */}
+          {isVersionPanelOpen && (
+            <VersionPanel onClose={() => setIsVersionPanelOpen(false)} />
+          )}
         </div>
-
-        {/* Right: Version Panel (collapsible) */}
-        {isVersionPanelOpen && (
-          <div className="w-64 flex-shrink-0 border-l border-border">
-            <VersionPanel />
-          </div>
-        )}
       </div>
     </div>
     </TooltipProvider>

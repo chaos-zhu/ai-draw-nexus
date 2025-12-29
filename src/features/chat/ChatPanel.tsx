@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { Send, ImagePlus, FileText, User, Bot, X, MessageSquarePlus, Loader2, CheckCircle2, Link,MoveRight } from 'lucide-react'
+import { Send, ImagePlus, FileText, User, Bot, X, MessageSquarePlus, Loader2, CheckCircle2, Link, MoveRight, Copy, RotateCcw, ChevronLeft,ArrowLeftToLine } from 'lucide-react'
 import { Button, Loading } from '@/components/ui'
 import { useChatStore } from '@/stores/chatStore'
 import { useEditorStore, selectIsEmpty } from '@/stores/editorStore'
@@ -17,7 +17,11 @@ import {
 } from '@/lib/fileUtils'
 import type { Attachment, ImageAttachment, DocumentAttachment, UrlAttachment } from '@/types'
 
-export function ChatPanel() {
+type ChatPanelProps = {
+  onCollapse?: () => void
+}
+
+export function ChatPanel({ onCollapse }: ChatPanelProps) {
   const [inputValue, setInputValue] = useState('')
   const [attachments, setAttachments] = useState<Attachment[]>([])
   const [isProcessingFile, setIsProcessingFile] = useState(false)
@@ -30,8 +34,8 @@ export function ChatPanel() {
 
   const { messages, isStreaming, initialPrompt, initialAttachments, clearInitialPrompt, clearMessages } = useChatStore()
   const isCanvasEmpty = useEditorStore(selectIsEmpty)
-  const { generate } = useAIGenerate()
-  const { error: showError } = useToast()
+  const { generate, retryLast } = useAIGenerate()
+  const { error: showError, success: showSuccess } = useToast()
 
   // Auto-scroll to bottom
   useEffect(() => {
@@ -142,6 +146,32 @@ export function ChatPanel() {
     }
   }
 
+  const handleCopyUserMessage = async (text: string) => {
+    const toCopy = text?.trim()
+    if (!toCopy) return
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(toCopy)
+      } else {
+        const textarea = document.createElement('textarea')
+        textarea.value = toCopy
+        textarea.setAttribute('readonly', 'true')
+        textarea.style.position = 'fixed'
+        textarea.style.left = '-9999px'
+        document.body.appendChild(textarea)
+        textarea.select()
+        document.execCommand('copy')
+        document.body.removeChild(textarea)
+      }
+      showSuccess('已复制')
+    } catch (err) {
+      showError('复制失败')
+      console.error(err)
+    }
+  }
+
+  const lastAssistantMessageId = [...messages].reverse().find((m) => m.role === 'assistant')?.id
+
   const handleSend = async (text?: string, initialAtts?: Attachment[]) => {
     const message = text || inputValue.trim()
     if ((!message && attachments.length === 0 && !initialAtts?.length) || isStreaming) return
@@ -238,25 +268,38 @@ export function ChatPanel() {
   }
 
   return (
-    <div className="flex h-full flex-col bg-surface">
-      {/* Header */}
-      <div className="flex items-center justify-between border-b border-border px-4 py-1">
-        <div>
-          <h2 className="font-medium text-primary">AI 助手</h2>
+      <div className="flex h-full flex-col bg-surface">
+        {/* Header */}
+        <div className="flex items-center justify-between border-b border-border px-4 py-1">
+          <div>
+            <h2 className="font-medium text-primary">AI 助手</h2>
           <p className="text-xs text-muted">
             {isCanvasEmpty ? '新建图表' : '基于当前图表修改'}
-          </p>
+            </p>
+          </div>
+          <div className="flex items-center gap-1">
+            {onCollapse && (
+              <Button
+                variant="ghost"
+                size="icon"
+                title="收起对话面板"
+                onClick={onCollapse}
+                disabled={isStreaming}
+              >
+                <ArrowLeftToLine className="h-4 w-4" />
+              </Button>
+            )}
+            <Button
+              variant="ghost"
+              size="icon"
+              title="新建对话"
+              onClick={clearMessages}
+              disabled={isStreaming || messages.length === 0}
+            >
+              <MessageSquarePlus className="h-4 w-4" />
+            </Button>
+          </div>
         </div>
-        <Button
-          variant="ghost"
-          size="icon"
-          title="新建对话"
-          onClick={clearMessages}
-          disabled={isStreaming || messages.length === 0}
-        >
-          <MessageSquarePlus className="h-4 w-4" />
-        </Button>
-      </div>
 
       {/* Messages */}
       <div className="flex-1 overflow-y-auto p-4">
@@ -291,54 +334,75 @@ export function ChatPanel() {
               </div>
 
               {/* Content */}
-              <div
-                className={`max-w-[80%] px-3 py-2 ${
-                  msg.role === 'user'
-                    ? 'bg-primary text-surface'
-                    : 'border border-border bg-background'
-                }`}
-              >
-                {/* Show attachments for user messages */}
-                {msg.role === 'user' && msg.attachments && msg.attachments.length > 0 && (
-                  <div className="mb-2 flex flex-wrap gap-2">
-                    {msg.attachments.map((att, idx) => (
-                      <div key={idx} className="text-xs opacity-80">
-                        {att.type === 'image' ? (
-                          <img
-                            src={att.dataUrl}
-                            alt={att.fileName}
-                            className="max-h-20 max-w-20 object-cover border border-surface/30"
-                          />
-                        ) : att.type === 'url' ? (
-                          <span className="flex items-center gap-1">
-                            <Link className="h-3 w-3" />
-                            {att.title}
-                          </span>
-                        ) : (
-                          <span className="flex items-center gap-1">
-                            <FileText className="h-3 w-3" />
-                            {att.fileName}
-                          </span>
-                        )}
-                      </div>
-                    ))}
-                  </div>
+              <div className="flex items-start gap-1">
+                {msg.role === 'user' && (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    title="复制"
+                    onClick={() => handleCopyUserMessage(msg.content)}
+                    disabled={!msg.content?.trim()}
+                    className="h-7 w-7"
+                  >
+                    <Copy className="h-4 w-4" />
+                  </Button>
                 )}
-                {/* AI消息使用状态板显示 */}
-                {msg.role === 'assistant' ? (
-                  msg.status === 'complete' ? (
+
+                <div
+                  className={`max-w-[80%] px-3 py-2 ${
+                    msg.role === 'user'
+                      ? 'bg-primary text-surface'
+                      : 'border border-border bg-background'
+                  }`}
+                >
+                  {/* Show attachments for user messages */}
+                  {msg.role === 'user' && msg.attachments && msg.attachments.length > 0 && (
+                    <div className="mb-2 flex flex-wrap gap-2">
+                      {msg.attachments.map((att, idx) => (
+                        <div key={idx} className="text-xs opacity-80">
+                          {att.type === 'image' ? (
+                            <img
+                              src={att.dataUrl}
+                              alt={att.fileName}
+                              className="max-h-20 max-w-20 object-cover border border-surface/30"
+                            />
+                          ) : att.type === 'url' ? (
+                            <span className="flex items-center gap-1">
+                              <Link className="h-3 w-3" />
+                              {att.title}
+                            </span>
+                          ) : (
+                            <span className="flex items-center gap-1">
+                              <FileText className="h-3 w-3" />
+                              {att.fileName}
+                            </span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {/* AI消息使用状态板显示 */}
+                  {msg.role === 'assistant' ? (
                     <div className="flex items-center gap-2">
                       {getStatusDisplay(msg.status).icon}
                       <span className="text-sm">{getStatusDisplay(msg.status).text}</span>
                     </div>
                   ) : (
-                    <div className="flex items-center gap-2">
-                      {getStatusDisplay(msg.status).icon}
-                      <span className="text-sm">{getStatusDisplay(msg.status).text}</span>
-                    </div>
-                  )
-                ) : (
-                  <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
+                    <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
+                  )}
+                </div>
+
+                {msg.role === 'assistant' && msg.id === lastAssistantMessageId && (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    title="重新发送"
+                    onClick={() => retryLast(msg.id)}
+                    disabled={isStreaming || msg.status === 'streaming' || msg.status === 'pending'}
+                    className="h-7 w-7"
+                  >
+                    <RotateCcw className="h-4 w-4" />
+                  </Button>
                 )}
               </div>
             </div>

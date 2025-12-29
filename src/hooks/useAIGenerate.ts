@@ -264,6 +264,133 @@ export function useAIGenerate() {
   }
 
   /**
+   * Retry the last AI request using the current payload context
+   * @param assistantMessageId - Optional existing assistant message to update in-place
+   */
+  const retryLast = async (assistantMessageId?: string) => {
+    if (!currentProject) return
+
+    const payloadMessages = usePayloadStore.getState().messages
+    if (!payloadMessages || payloadMessages.length === 0) {
+      showError('没有可重新发送的上下文')
+      return
+    }
+
+    const engineType = currentProject.engineType
+    const systemPrompt = SYSTEM_PROMPTS[engineType]
+
+    const assistantMsgId =
+      assistantMessageId ??
+      addMessage({
+        role: 'assistant',
+        content: '',
+        status: 'streaming',
+      })
+
+    updateMessage(assistantMsgId, {
+      content: 'Retrying...',
+      status: 'streaming',
+    })
+
+    setStreaming(true)
+    setLoading(true)
+
+    try {
+      // Ensure payload panel stays in-sync with what we resend
+      setMessages(payloadMessages)
+
+      let response: string
+      if (USE_STREAMING) {
+        response = await aiService.streamChat(
+          payloadMessages,
+          (_chunk, accumulated) => {
+            updateMessage(assistantMsgId, {
+              content: `Retrying...\n\n${accumulated}`,
+            })
+          }
+        )
+      } else {
+        response = await aiService.chat(payloadMessages)
+      }
+
+      let finalCode = extractCode(response, engineType)
+
+      // Validate the generated content with auto-fix for Mermaid
+      let validatedCode = finalCode
+      let validation = await validateContent(validatedCode, engineType)
+      if (!validation.valid && engineType === 'mermaid') {
+        validatedCode = await attemptMermaidAutoFix(
+          validatedCode,
+          validation.error || 'Unknown error',
+          systemPrompt,
+          assistantMsgId
+        )
+        validation = await validateContent(validatedCode, engineType)
+      }
+
+      if (!validation.valid) {
+        throw new Error(`Invalid ${engineType} output: ${validation.error}`)
+      }
+
+      finalCode = validatedCode
+
+      setContentFromVersion(finalCode)
+
+      updateMessage(assistantMsgId, {
+        content: 'Diagram generated successfully.',
+        status: 'complete',
+      })
+
+      await VersionRepository.create({
+        projectId: currentProject.id,
+        content: finalCode,
+        changeSummary: 'AI 重试',
+      })
+
+      try {
+        let thumbnail: string = ''
+        if (engineType === 'drawio') {
+          const getThumbnailWithRetry = async (maxRetries = 3, delay = 500): Promise<string> => {
+            for (let i = 0; i < maxRetries; i++) {
+              await new Promise(resolve => setTimeout(resolve, delay))
+              const getter = useEditorStore.getState().thumbnailGetter
+              if (getter) {
+                const result = await getter()
+                if (result) return result
+              }
+            }
+            return ''
+          }
+          thumbnail = await getThumbnailWithRetry()
+        } else {
+          thumbnail = await generateThumbnail(finalCode, engineType)
+        }
+
+        if (thumbnail) {
+          await ProjectRepository.update(currentProject.id, { thumbnail })
+          setProject({ ...currentProject, thumbnail })
+        }
+      } catch (err) {
+        console.error('Failed to generate thumbnail:', err)
+      }
+
+      await ProjectRepository.update(currentProject.id, {})
+      success('Diagram generated successfully')
+
+    } catch (error) {
+      console.error('AI retry failed:', error)
+      updateMessage(assistantMsgId, {
+        content: `Error: ${error instanceof Error ? error.message : 'Retry failed'}`,
+        status: 'error',
+      })
+      showError(error instanceof Error ? error.message : 'Retry failed')
+    } finally {
+      setStreaming(false)
+      setLoading(false)
+    }
+  }
+
+  /**
    * Two-phase generation for initial creation (drawio/excalidraw)
    */
   const twoPhaseGeneration = async (
@@ -489,5 +616,5 @@ export function useAIGenerate() {
     return currentCode
   }
 
-  return { generate }
+  return { generate, retryLast }
 }

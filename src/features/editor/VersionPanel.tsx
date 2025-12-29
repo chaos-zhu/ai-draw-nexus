@@ -1,11 +1,15 @@
 import { useState, useEffect } from 'react'
-import { RotateCcw, Clock,ArrowRightToLine } from 'lucide-react'
+import { RotateCcw, Clock, ArrowRightToLine } from 'lucide-react'
 import { Button, Loading } from '@/components/ui'
 import { useEditorStore } from '@/stores/editorStore'
 import { VersionRepository } from '@/services/versionRepository'
 import type { VersionHistory } from '@/types'
 
-export function VersionPanel() {
+interface VersionPanelProps {
+  onClose: () => void
+}
+
+export function VersionPanel({ onClose }: VersionPanelProps) {
   const [versions, setVersions] = useState<VersionHistory[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -49,12 +53,14 @@ export function VersionPanel() {
   }
 
   return (
-    <div className="flex h-full flex-col bg-surface">
+    <div className="absolute right-4 top-4 bottom-4 w-72 flex flex-col bg-surface rounded-lg shadow-lg border border-border z-50">
       {/* Header */}
       <div className="flex justify-between items-center border-b border-border px-4 py-3">
         <div className="flex items-center gap-2">
-        <ArrowRightToLine className="h-4 w-4" />
-        <h2 className="font-medium text-primary">版本历史</h2>
+          <Button variant="ghost" size="icon" className="h-6 w-6" onClick={onClose}>
+            <ArrowRightToLine className="h-4 w-4" />
+          </Button>
+          <h2 className="font-medium text-primary">版本历史</h2>
         </div>
         <p className="text-xs text-muted">{versions.length} 个版本</p>
       </div>

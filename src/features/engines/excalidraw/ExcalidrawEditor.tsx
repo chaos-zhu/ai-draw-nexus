@@ -207,6 +207,16 @@ export const ExcalidrawEditor = forwardRef<ExcalidrawEditorRef, ExcalidrawEditor
         elements: restoredElements,
         appState: { isLoading: false },
       })
+
+      // Scroll to content center after scene update with a small delay
+      // to ensure the scene is fully rendered
+      setTimeout(() => {
+        excalidrawAPI.scrollToContent(restoredElements, {
+          fitToContent: true,
+          animate: true,
+          duration: 300,
+        })
+      }, 100)
     } catch {
       // Invalid JSON, ignore
     }

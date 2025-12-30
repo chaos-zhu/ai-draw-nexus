@@ -7,6 +7,15 @@ const QUOTA_STORAGE_KEY = 'ai-draw-quota'
 const PASSWORD_STORAGE_KEY = 'ai-draw-access-password'
 const LLM_CONFIG_STORAGE_KEY = 'ai-draw-llm-config'
 
+// 运行时配置类型声明（由 Docker entrypoint 注入）
+declare global {
+  interface Window {
+    __RUNTIME_CONFIG__?: {
+      DAILY_QUOTA?: number
+    }
+  }
+}
+
 export interface LLMConfig {
   provider: string // 'openai' | 'anthropic'
   baseUrl: string
@@ -57,10 +66,26 @@ function saveQuotaData(data: QuotaData): void {
 export const quotaService = {
   /**
    * 获取每日配额上限
+   * 优先级：运行时配置 > 构建时环境变量 > 默认值
    */
   getDailyQuota(): number {
-    const quota = import.meta.env.VITE_DAILY_QUOTA
-    return quota ? parseInt(quota, 10) : 10 // 默认 10 次
+    // 1. 优先使用运行时配置（Docker 部署时通过环境变量注入）
+    const runtimeQuota = window.__RUNTIME_CONFIG__?.DAILY_QUOTA
+    if (typeof runtimeQuota === 'number' && runtimeQuota > 0) {
+      return runtimeQuota
+    }
+
+    // 2. 其次使用构建时环境变量
+    const buildTimeQuota = import.meta.env.VITE_DAILY_QUOTA
+    if (buildTimeQuota) {
+      const parsed = parseInt(buildTimeQuota, 10)
+      if (!isNaN(parsed) && parsed > 0) {
+        return parsed
+      }
+    }
+
+    // 3. 默认值
+    return 10
   },
 
   /**

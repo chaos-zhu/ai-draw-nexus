@@ -10,10 +10,8 @@ services:
       - AI_BASE_URL=${AI_BASE_URL:-https://api.openai.com/v1}
       - AI_API_KEY=${AI_API_KEY:-}
       - AI_MODEL_ID=${AI_MODEL_ID:-gpt-4o}
-      # 访问密码（可选）
+      # 访问密码（必须设置）
       - ACCESS_PASSWORD=${ACCESS_PASSWORD:-}
-      # 每日配额限制（默认 10 次）
-      - DAILY_QUOTA=${DAILY_QUOTA:-10}
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost/health"]

@@ -10,8 +10,6 @@ export function ProfilePage() {
   const [activeTab] = useState('settings')
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
-  const [quotaUsed, setQuotaUsed] = useState(0)
-  const [quotaTotal, setQuotaTotal] = useState(10)
   const { success, error: showError } = useToast()
 
   // LLM 配置状态
@@ -24,9 +22,6 @@ export function ProfilePage() {
   const [showApiKey, setShowApiKey] = useState(false)
 
   useEffect(() => {
-    // 加载配额信息
-    setQuotaUsed(quotaService.getUsedCount())
-    setQuotaTotal(quotaService.getDailyQuota())
     // 加载已保存的密码
     setPassword(quotaService.getAccessPassword())
     // 加载已保存的 LLM 配置
@@ -75,10 +70,6 @@ export function ProfilePage() {
     success('LLM 配置已清除')
   }
 
-  const quotaPercentage = Math.min(100, (quotaUsed / quotaTotal) * 100)
-  const hasPassword = quotaService.hasAccessPassword()
-  const hasLLMConfig = quotaService.hasLLMConfig()
-
   return (
     <div className="flex min-h-screen bg-background">
       <AppSidebar />
@@ -107,18 +98,6 @@ export function ProfilePage() {
               <div className="flex-1 p-6">
                 <h2 className="mb-6 text-lg font-medium text-primary">设置</h2>
 
-                {/* 每日配额 */}
-                <QuotaSection
-                  quotaUsed={quotaUsed}
-                  quotaTotal={quotaTotal}
-                  quotaPercentage={quotaPercentage}
-                  hasPassword={hasPassword}
-                  hasLLMConfig={hasLLMConfig}
-                />
-
-                {/* 分隔线 */}
-                <div className="my-6 border-t border-border" />
-
                 {/* 访问密码 */}
                 <PasswordSection
                   password={password}
@@ -146,43 +125,6 @@ export function ProfilePage() {
           </div>
         </div>
       </main>
-    </div>
-  )
-}
-
-interface QuotaSectionProps {
-  quotaUsed: number
-  quotaTotal: number
-  quotaPercentage: number
-  hasPassword: boolean
-  hasLLMConfig: boolean
-}
-
-function QuotaSection({ quotaUsed, quotaTotal, quotaPercentage, hasPassword, hasLLMConfig }: QuotaSectionProps) {
-  const isUnlimited = hasPassword || hasLLMConfig
-  return (
-    <div>
-      <h3 className="mb-3 text-sm font-medium text-primary">每日配额</h3>
-      <div className="space-y-3">
-        {/* 进度条 */}
-        <div className="h-2 w-full overflow-hidden rounded-full bg-background">
-          <div
-            className="h-full rounded-full bg-primary transition-all duration-300"
-            style={{ width: `${quotaPercentage}%` }}
-          />
-        </div>
-        {/* 配额信息 */}
-        <div className="flex items-center justify-between text-sm">
-          <span className="text-muted">
-            已使用 <span className="font-medium text-primary">{quotaUsed}</span> / {quotaTotal} 次
-          </span>
-          {isUnlimited && (
-            <span className="rounded-full bg-green-100 px-2 py-0.5 text-xs text-green-700 dark:bg-green-900 dark:text-green-300">
-              无限制
-            </span>
-          )}
-        </div>
-      </div>
     </div>
   )
 }
@@ -225,7 +167,7 @@ function PasswordSection({
           </button>
         </div>
         <p className="text-xs text-muted">
-          输入正确的访问密码后，可无限制使用 AI 功能，不消耗每日配额。
+          输入正确的访问密码后，可使用 AI 功能。
         </p>
         <Link
           to="/about"
@@ -328,7 +270,7 @@ function LLMConfigSection({
         </div>
 
         <p className="text-xs text-muted">
-          配置自己的 LLM API 后，可无限制使用 AI 功能，不消耗每日配额。
+          配置自己的 LLM API 后，可使用 AI 功能。
           <br />
           <span className="text-yellow-600 dark:text-yellow-400">
             注意：如果同时设置了访问密码，将优先使用访问密码。

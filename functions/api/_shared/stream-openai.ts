@@ -2,7 +2,7 @@ import type { Env, Message } from './types'
 import { corsHeaders } from './cors'
 import { convertContentPartsToAnthropic } from './ai-providers'
 
-export async function streamOpenAI(messages: Message[], env: Env, exempt: boolean = false): Promise<Response> {
+export async function streamOpenAI(messages: Message[], env: Env): Promise<Response> {
   const baseUrl = env.AI_BASE_URL
   const apiKey = env.AI_API_KEY
 
@@ -82,7 +82,6 @@ export async function streamOpenAI(messages: Message[], env: Env, exempt: boolea
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache',
       'Connection': 'keep-alive',
-      'X-Quota-Exempt': exempt ? 'true' : 'false',
     },
   })
 }

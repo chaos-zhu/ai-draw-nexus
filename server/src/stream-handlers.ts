@@ -5,7 +5,6 @@ import { convertContentPartsToAnthropic } from './ai-providers.js'
 export async function streamOpenAI(
   messages: Message[],
   env: Env,
-  exempt: boolean,
   res: ExpressResponse
 ): Promise<void> {
   const baseUrl = env.AI_BASE_URL
@@ -37,7 +36,6 @@ export async function streamOpenAI(
   res.setHeader('Content-Type', 'text/event-stream')
   res.setHeader('Cache-Control', 'no-cache')
   res.setHeader('Connection', 'keep-alive')
-  res.setHeader('X-Quota-Exempt', exempt ? 'true' : 'false')
 
   const reader = response.body?.getReader()
   if (!reader) {
@@ -87,7 +85,6 @@ export async function streamOpenAI(
 export async function streamAnthropic(
   messages: Message[],
   env: Env,
-  exempt: boolean,
   res: ExpressResponse
 ): Promise<void> {
   const baseUrl = env.AI_BASE_URL
@@ -129,7 +126,6 @@ export async function streamAnthropic(
   res.setHeader('Content-Type', 'text/event-stream')
   res.setHeader('Cache-Control', 'no-cache')
   res.setHeader('Connection', 'keep-alive')
-  res.setHeader('X-Quota-Exempt', exempt ? 'true' : 'false')
 
   const reader = response.body?.getReader()
   if (!reader) {

@@ -1,6 +1,6 @@
 import type { Env, ChatRequest, LLMConfig } from './_shared/types'
 import { corsHeaders, handleCors } from './_shared/cors'
-import { validateAccessPassword } from './_shared/auth'
+import { validateAccess } from './_shared/auth'
 import { callOpenAI, callAnthropic } from './_shared/ai-providers'
 import { streamOpenAI } from './_shared/stream-openai'
 import { streamAnthropic } from './_shared/stream-anthropic'
@@ -34,16 +34,18 @@ export const onRequestPost: PagesFunction<Env> = async (context: PagesContext) =
   const { request, env } = context
 
   try {
-    const { valid, exempt } = validateAccessPassword(request, env)
+    const body: ChatRequest = await request.json()
+    const { messages, stream = false, llmConfig } = body
+
+    const hasCustomLLM = !!(llmConfig && llmConfig.apiKey)
+    const { valid, error } = validateAccess(request, env, hasCustomLLM)
+
     if (!valid) {
-      return new Response(JSON.stringify({ error: '访问密码错误' }), {
+      return new Response(JSON.stringify({ error: error || '访问被拒绝' }), {
         status: 401,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       })
     }
-
-    const body: ChatRequest = await request.json()
-    const { messages, stream = false, llmConfig } = body
 
     if (!messages || !Array.isArray(messages)) {
       return new Response(JSON.stringify({ error: 'Invalid request: messages required' }), {
@@ -52,20 +54,16 @@ export const onRequestPost: PagesFunction<Env> = async (context: PagesContext) =
       })
     }
 
-    // 使用自定义 LLM 配置时也免除配额
-    const hasCustomLLM = !!(llmConfig && llmConfig.apiKey)
-    const effectiveExempt = exempt || hasCustomLLM
     const effectiveEnv = createEffectiveEnv(env, llmConfig)
     const provider = effectiveEnv.AI_PROVIDER || 'openai'
-    const quotaHeaders = { ...corsHeaders, 'X-Quota-Exempt': effectiveExempt ? 'true' : 'false' }
 
     if (stream) {
       switch (provider) {
         case 'anthropic':
-          return streamAnthropic(messages, effectiveEnv, effectiveExempt)
+          return streamAnthropic(messages, effectiveEnv)
         case 'openai':
         default:
-          return streamOpenAI(messages, effectiveEnv, effectiveExempt)
+          return streamOpenAI(messages, effectiveEnv)
       }
     } else {
       let response: string
@@ -81,7 +79,7 @@ export const onRequestPost: PagesFunction<Env> = async (context: PagesContext) =
       }
 
       return new Response(JSON.stringify({ content: response }), {
-        headers: { ...quotaHeaders, 'Content-Type': 'application/json' },
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       })
     }
   } catch (error) {

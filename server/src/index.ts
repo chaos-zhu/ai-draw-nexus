@@ -15,7 +15,6 @@ app.use(cors({
   origin: '*',
   methods: ['GET', 'POST', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'X-Access-Password', 'X-Custom-LLM'],
-  exposedHeaders: ['X-Quota-Exempt'],
 }))
 app.use(express.json({ limit: '50mb' }))
 
@@ -43,21 +42,33 @@ function createEffectiveEnv(env: Env, llmConfig?: LLMConfig): Env {
   }
 }
 
-// Validate access password
-function validateAccessPassword(
+// Validate access - requires either correct password or custom LLM config
+function validateAccess(
   password: string | undefined,
-  configuredPassword: string | undefined
-): { valid: boolean; exempt: boolean } {
+  configuredPassword: string | undefined,
+  hasCustomLLM: boolean
+): { valid: boolean; error?: string } {
+  // If user provides custom LLM config, allow access
+  if (hasCustomLLM) {
+    return { valid: true }
+  }
+
+  // If no configured password on server, require custom LLM
   if (!configuredPassword) {
-    return { valid: true, exempt: false }
+    return { valid: false, error: '服务端未配置访问密码，请使用自定义 LLM 配置' }
   }
-  if (password) {
-    if (password === configuredPassword) {
-      return { valid: true, exempt: true }
-    }
-    return { valid: false, exempt: false }
+
+  // If no password provided by user
+  if (!password) {
+    return { valid: false, error: '请输入访问密码或配置自定义 LLM' }
   }
-  return { valid: true, exempt: false }
+
+  // Validate password
+  if (password === configuredPassword) {
+    return { valid: true }
+  }
+
+  return { valid: false, error: '访问密码错误' }
 }
 
 // Health check endpoint
@@ -70,34 +81,33 @@ app.post('/api/chat', async (req, res) => {
   try {
     const env = getEnv()
     const password = req.headers['x-access-password'] as string | undefined
-    const { valid, exempt } = validateAccessPassword(password, env.ACCESS_PASSWORD)
-
-    if (!valid) {
-      res.status(401).json({ error: '访问密码错误' })
-      return
-    }
-
     const body: ChatRequest = req.body
     const { messages, stream = false, llmConfig } = body
+
+    const hasCustomLLM = !!(llmConfig && llmConfig.apiKey)
+    const { valid, error } = validateAccess(password, env.ACCESS_PASSWORD, hasCustomLLM)
+
+    if (!valid) {
+      res.status(401).json({ error: error || '访问被拒绝' })
+      return
+    }
 
     if (!messages || !Array.isArray(messages)) {
       res.status(400).json({ error: 'Invalid request: messages required' })
       return
     }
 
-    const hasCustomLLM = !!(llmConfig && llmConfig.apiKey)
-    const effectiveExempt = exempt || hasCustomLLM
     const effectiveEnv = createEffectiveEnv(env, llmConfig)
     const provider = effectiveEnv.AI_PROVIDER || 'openai'
 
     if (stream) {
       switch (provider) {
         case 'anthropic':
-          await streamAnthropic(messages, effectiveEnv, effectiveExempt, res)
+          await streamAnthropic(messages, effectiveEnv, res)
           break
         case 'openai':
         default:
-          await streamOpenAI(messages, effectiveEnv, effectiveExempt, res)
+          await streamOpenAI(messages, effectiveEnv, res)
           break
       }
     } else {
@@ -113,7 +123,6 @@ app.post('/api/chat', async (req, res) => {
           break
       }
 
-      res.setHeader('X-Quota-Exempt', effectiveExempt ? 'true' : 'false')
       res.json({ content: response })
     }
   } catch (error) {
